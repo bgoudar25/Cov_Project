@@ -1,27 +1,24 @@
-## General
-The infrastructure folder holds all Cloudformation Templates which are relevant and needed to deploy the application.
+## Parameter Description
+The resources deployed by the infrastructure.yaml are configured by the parameters entered within the qa.conf and prod.conf.
 
-The CI/CD pipeline.yaml will be initially set-up to deploy the infrastructure.yaml to the QA and PRO account.
+Below is a description of all standard parameters which are available in the project template.
+```json
+{
+  "Parameters": {
+    "VpcProductVersion": "Version of the VPC Product which is deployed.",
+    "Stage": "Stage of the Config File, typically prod or qa",
+    "ServiceName": "Name of the service which is deployed.",
+    "AlarmsEmail":"E-Mail address to be informed in case of alarms.",
+    "EnableEC2Autorecover":"Boolean if you want to auto recover your Ec2 if it is stuck.",
+    "EnableEnhancedMonitoring":"Boolean if you want to enable enhanced monitoring on the Ec2",
+    "BackupRetentionPeriod":"Time in days to keep backups taken.",
+    "EC2RestoreAMI":"AMI Id of a Snapshot from which you want to restore the Ec2",
+    "EC2InstanceType":"Ec2 Intance Type",
+    "OSPatchingTimeWindow": "AWS Cron Expression which defines the Operating System Maintenance Window",
+    "EC2VolumeSize":"Volume size of the Ec2 instance in GB.",
+    "DBSnapshotIdentifier":"Database Snapshot Id of a Snapshot from which you want to restore the RDS Server",
+    "DBInstanceType":"RDS Instance Typ"
+  }
+}
 
-## Initial usage
-Initially the infrastructure.yaml contains the nested stack resources and parameters required to deploy all templates available.
-
-Whenever you start a new project you will need to remove all files / resources which are not used by your project.
-For each resource there is also a dedicated "CloudformationDeployPolicy" that grants the CrossAccount role permissions to deploy it. 
-
-E.g. So if you do not require Appstream following actions are needed:
-
-1. Delete the Appstream Folder ./infrastructure/appstream 
-2. Remove the Appstream Resources from the ./infrastructure.yaml
-3. Delete the Resource "CloudFormationDeploymentAppStreamPolicy" in the cross-account-iam-roles.yaml which is the resource that granted the cross account role entitlement to deploy the Appstream resources.
-
-In case you do not require any other components it will be the same process with Ec2, RDS and any other resources.
-
-## Config Parameter  
-
-The ./config folder stores only parameter files which are passed to the infrastructure.yaml.
-
-Depending on the stage it takes:
-- QA : qa.conf
-- PROD : prod.conf
-- Prototyping : proto.conf (only used by the migration teams)
+```

@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  This AWS template creates CFN resources to Schedule Auto Start-Stop of ECS task and used EventBridge Rules to save cost.
+
+Parameters:
+  Stage:
+    Description: Stage of the application
+    Type: String
+  ServiceName:
+    Description: The name of the application to roll out
+    Type: String
+  ECSStartScheduleTime:
+    Description: Auto start ECS task every Mon 05:00 a.m. CET
+    Type: String
+  ECSStopScheduleTime:
+    Description: Auto stop ECS task every Fri 04:00 p.m. CET
+    Type: String
+
+Resources:
+
+  ECSSchedulerLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W3002
+    Properties:
+      Description: Function to start or stop task in ECS cluster
+      Code: "lambda/"
+      FunctionName: !Sub "ecs-task-scheduler-${ServiceName}-${Stage}"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Handler: main.lambda_handler
+      Timeout: 60
+      TracingConfig:
+        Mode: Active
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+        - "arn:aws:iam::aws:policy/AmazonSSMFullAccess"
+      Policies:
+        - PolicyName: ECSPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "ecs:UpdateService"
+                - "ecs:ListTasks"
+                Resource: '*'
+        - PolicyName: AWSXRayPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "xray:PutTraceSegments"
+                - "xray:PutTelemetryRecords"
+                - "xray:GetSamplingRules"
+                - "xray:GetSamplingTargets"
+                - "xray:GetSamplingStatisticSummaries"
+                Resource: '*'
+
+  EventBridgeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ECSSchedulerLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      # SourceArn: !GetAtt EventRuleNewCustomer.Arn
+
+  StartEcsServicesRuleCloudwatch:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Start ECS Task Rule
+      Name: !Sub "start-ecs-tasks-rule-${ServiceName}-${Stage}"
+      ScheduleExpression: !Ref ECSStartScheduleTime
+      State: ENABLED
+      Targets:  
+        - Arn: !GetAtt ECSSchedulerLambda.Arn
+          Input: !Sub '{"action": "start", "cluster_name": "${ServiceName}-ecs-cluster", "service_name": "${ServiceName}-biwiki-code"}'
+          Id: startEcs
+    
+  StopEcsServicesRuleCloudwatch:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Stop ECS Task Rule
+      Name: !Sub "stop-ecs-tasks-rule-${ServiceName}-${Stage}"
+      ScheduleExpression: !Ref ECSStopScheduleTime
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt ECSSchedulerLambda.Arn
+          Input: !Sub '{"action": "stop", "cluster_name": "${ServiceName}-ecs-cluster", "service_name": "${ServiceName}-biwiki-code"}'
+          Id: stopEcs

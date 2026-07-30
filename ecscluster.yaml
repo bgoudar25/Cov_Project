@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cluster Resources for BI Wiki Application
+Parameters:
+  ServiceName:
+    Description: Name of the ECS Application
+    Type: String
+    Default: biwiki
+  Stage:
+    Description: Name of the Application
+    Type: String
+  VPCId:
+    Description: SharedAndConnectedVPC id to place all the resources
+    Type: AWS::EC2::VPC::Id
+  IntranetSubnetIdA:
+    Description: name of the Intranet subnet A of the SharedAndConnectedVPC
+    Type: AWS::EC2::Subnet::Id
+  IntranetSubnetIdB:
+    Description: name of the Intranet subnet B of the SharedAndConnectedVPC
+    Type: AWS::EC2::Subnet::Id
+  ECRRepositoryUrl:
+    Description: ECR repository is stored in Automation Account.
+    Type: String
+  ECRBiWikiImageName:
+    Type: String
+  ECRImageVersion:
+    Type: String
+    Default: latest
+  ECSDesiredCount:
+    Type: Number
+  ContainerCPU:
+    Type: Number
+  ContainerMemory:
+    Type: Number
+  SharedSecurityGroup:
+    Type: String
+  SharedTargetGroupBiWiki: 
+    Type: String
+  SharedBiWikiEFS:
+    Type: String
+  BiWikiSecretArn:
+    Type: String
+  BiWikiDBSecretArn:
+    Type: String
+  ContainerPort:
+    Type: String
+  ContainerSoftLimit:
+    Type: String
+  ContainerHardLimit:
+    Type: String
+
+# Conditions:
+#   # IsProd: !Equals
+#   #   - !Ref 'Stage'
+#   #   - prod
+#   IsQA: !Equals
+#     - !Ref 'Stage'
+#     - qa 
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      KmsKeyId:
+        Fn::GetAtt:
+        - LogEncryptionKey
+        - Arn
+      LogGroupName:
+        Fn::Sub: /ecs/${ServiceName}
+      RetentionInDays: 30
+  LogEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: BI Wiki Log Encryption Key
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+        - Effect: Allow
+          Principal:
+            Service: logs.amazonaws.com
+          Action:
+          - kms:*
+          Resource: '*'
+      KeySpec: SYMMETRIC_DEFAULT
+      PendingWindowInDays: 30
+      Tags:
+      - Key: cov:type
+        Value: KMS
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ECS-Task-Execution-Role
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+      - PolicyName: "ssm-messages-policy"
+        PolicyDocument:
+          Statement:
+          - Effect: "Allow"
+            Action:
+            - "ssmmessages:CreateControlChannel"
+            - "ssmmessages:CreateDataChannel"
+            - "ssmmessages:OpenControlChannel"
+            - "ssmmessages:OpenDataChannel"
+            Resource: "*"
+      - PolicyName: "BiWikiSecretAccess"
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: "Allow"
+            Action:
+            - "secretsmanager:DescribeSecret"
+            - "secretsmanager:GetSecretValue"
+            - "secretsmanager:GetResourcePolicy"
+            - "secretsmanager:ListSecretVersionIds"
+            Resource: 
+              - !Ref BiWikiSecretArn
+              - !Ref BiWikiDBSecretArn
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName:
+        Fn::Sub:
+        - ${ServiceName}-ecs-cluster
+        - ApplicationName:
+            Ref: ServiceName
+      CapacityProviders:
+      - FARGATE_SPOT
+      - FARGATE
+      ClusterSettings:
+      - Name: containerInsights
+        Value: enabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          LogConfiguration:
+            CloudWatchEncryptionEnabled: false
+            CloudWatchLogGroupName:
+              Ref: LogGroup
+          Logging: OVERRIDE
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub:
+          - ${ServiceName}-ecs-cluster
+          - ApplicationName:
+              Ref: ServiceName
+      - Key: cov:type
+        Value: compute
+###################### Task Definition for BIWIKI Application ######################
+  ECSTaskDefinitionBiWiki:
+    # Condition: IsQA
+    Type: AWS::ECS::TaskDefinition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ContainerDefinitions:
+      - Essential: true
+        LinuxParameters:
+          InitProcessEnabled: true
+        Image: !Sub '${ECRRepositoryUrl}/${ECRBiWikiImageName}:${ECRImageVersion}' 
+        Name: !Ref ECRBiWikiImageName
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Fn::Sub: ${AWS::Region}
+            awslogs-stream-prefix: ecs
+        PortMappings:
+        - ContainerPort: !Ref ContainerPort
+          HostPort: !Ref ContainerPort
+          Protocol: tcp
+        # ReadonlyRootFilesystem: true
+        Ulimits:
+        - Name: nofile
+          SoftLimit: !Ref ContainerSoftLimit 
+          HardLimit: !Ref ContainerHardLimit 
+        Environment:
+        - Name: AWS_REGION
+          Value:
+            Ref: AWS::Region
+      Family:
+        Fn::Sub: ${ServiceName}-TaskDefination-BiWiki
+      ExecutionRoleArn:
+        Fn::GetAtt:
+        - ECSTaskExecutionRole
+        - Arn
+      TaskRoleArn:
+        Fn::GetAtt:
+        - ECSTaskExecutionRole
+        - Arn
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      Cpu:
+        Ref: ContainerCPU
+      Memory:
+        Ref: ContainerMemory
+      Volumes: 
+        - 
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref SharedBiWikiEFS
+          Name: "biwiki-vol"
+
+###################### ECS Service for BIWIKI Application ######################
+
+  ECSServiceBiWiki:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName:
+        Fn::Sub: '${ServiceName}-${ECRBiWikiImageName}'
+      Cluster:
+        Ref: ECSCluster
+      EnableExecuteCommand: true
+      DesiredCount:
+        Ref: ECSDesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: 1.4.0
+      TaskDefinition:
+        Ref: ECSTaskDefinitionBiWiki
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+          - Ref: SharedSecurityGroup
+          Subnets:
+          - Ref: IntranetSubnetIdA
+          - Ref: IntranetSubnetIdB
+      SchedulingStrategy: REPLICA
+      LoadBalancers:
+      - TargetGroupArn: !Ref SharedTargetGroupBiWiki
+        ContainerName: !Ref ECRBiWikiImageName
+        ContainerPort: !Ref ContainerPort
+Outputs:
+  SharedClusterArn:
+    Description: Arn of the ECS cluster
+    Value:
+      Fn::GetAtt:
+      - ECSCluster
+      - Arn
+    Export:
+      Name: SharedClusterArn
+
+  SharedClusterName:
+    Description: Name of the ECS cluster
+    Value:
+      Ref: ECSCluster
+    Export:
+      Name: SharedClusterName

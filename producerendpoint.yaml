@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: NLB & Endpoint Sharing
+
+Parameters:
+  ServiceName:
+    Type: "String"
+  Stage:
+    Type: "String"
+  NLBArn:
+    Type: "String"
+  EndpointServiceDomain:
+    Type: "String"
+
+
+Resources:
+   # NLB is used for the Endpoint, please do NEVER add a UDP listener, this would crash the connections by Covestro VPC design.
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: false
+      NetworkLoadBalancerArns:
+      - !Ref NLBArn
+  
+  ESPrivateDNSLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W3002
+    Properties:
+      Description: Function to update a launch template with new ami id after it became available
+      Code: "update_endpoint/"
+      FunctionName: update_endpoint
+      Role: !GetAtt ExecutionRole.Arn
+      Runtime: python3.12
+      Handler: update_endpoint.handler
+      Timeout: 60
+
+  ExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: LambdaFunctionPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeVpcEndpoint*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:*endpoint*
+                Resource: !Sub "arn:aws:ec2:*:${AWS::AccountId}:vpc-endpoint-service/${EndpointService}"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                # Hardcoded Lambda Name to avoid circular dependency 
+                  - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/update_endpoint*"
+                  - !Sub "arn:aws:logs:*:${AWS::AccountId}:/aws/lambda/update_endpoint*"
+  
+  ESPrivateDNSSetter:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn:
+      - "ExecutionRole"
+    Properties: 
+      ServiceToken: !GetAtt ESPrivateDNSLambda.Arn
+      EndpointService: !Ref EndpointService
+      EndpointServiceDomain: !Ref EndpointServiceDomain
+
+  EndpointServicePermissions:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      AllowedPrincipals:
+        - arn:aws:iam::789451457520:root # Grant access to Networking Account which will share it with all DevOps / Legacy
+      ServiceId: !Ref EndpointService
+      
+  EndpointServiceSharing:
+    Type: "AWS::ServiceCatalog::CloudFormationProvisionedProduct"
+    Properties:
+      ProductName: "EndpointServiceSharing"
+      ProvisionedProductName: !Sub "${Stage}-${ServiceName}-Endpoint"
+      ProvisioningArtifactName: v0.0.12
+      ProvisioningParameters:
+      - Key: "ApplicationName"
+        Value: !Ref EndpointServiceDomain
+      - Key: "ServiceEndpointName"
+        Value: !GetAtt ESPrivateDNSSetter.ServiceName
+      - Key: "ServiceEndpointTXTRecordName"
+        Value: !GetAtt ESPrivateDNSSetter.PrivateDnsNameConfigurationName
+      - Key: "ServiceEndpointTXTRecordValue"
+        Value: !GetAtt ESPrivateDNSSetter.PrivateDnsNameConfigurationValue

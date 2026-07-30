@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Endpoint Consumption
+
+Parameters:
+  ServiceName:
+    Type: "String"
+  Stage:
+    Type: "String"
+  VPCName:
+    Type: "String" 
+  SharedEndpointVersion:
+    Type: "String" 
+Conditions:
+  IsProd: !Equals
+    - !Ref 'Stage'
+    - prod
+  IsQA: !Equals
+    - !Ref 'Stage'
+    - qa 
+Resources:
+  EndpointConsumer:
+    Type: "AWS::ServiceCatalog::CloudFormationProvisionedProduct"
+    Properties:
+      ProductName: "CovestroSharedService"
+      ProvisionedProductName: !Sub "${ServiceName}-SharedService-${Stage}"
+      ProvisioningArtifactName: !Ref SharedEndpointVersion
+      ProvisioningParameters:
+        - Key: "UniqueVpcName"
+          Value: !Ref VPCName
+        - Key: "ServiceName"
+          Value: !If [IsQA, !Sub "bisql-${Stage}-db.992781264900.aws.glpoly.net", !Sub "bisql-${Stage}-db.583382777510.aws.glpoly.net"] 

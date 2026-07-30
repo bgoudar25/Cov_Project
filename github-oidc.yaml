@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'GitHub OIDC Integration for biwiki-infra repository'
+
+Parameters: 
+  GitHubRepo:
+    Type: String
+    Default: 'covestro/biwiki-infra'
+    Description: 'biwiki-infra'
+  Environment:
+    Type: String
+    Default: 'qa'
+    Description: 'biwiki-infra'
+
+Resources:
+  # GitHub OIDC Provider
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        # GitHub's OIDC thumbprint, see https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html | Obtain the thumbprint for an OpenID Connect identity provider
+        - d89e3bd43d5d909b47a18977aa9d5ce36cee184c
+      Tags:
+        - Key: Name
+          Value: GitHubActionsOIDCProvider
+        - Key: Repository
+          Value: !Ref GitHubRepo
+
+  # IAM Role for GitHub Actions
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'GitHubActions-cicd-Role-${Environment}'
+      Description: !Sub 'Role for GitHub Actions in ${GitHubRepo}'
+      MaxSessionDuration: 3600  # 1 hour
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt GitHubOIDCProvider.Arn
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com'
+              StringLike:
+                'token.actions.githubusercontent.com:sub': 
+                  - !Sub 'repo:${GitHubRepo}:*'
+                # Alternative: Allow only specific branch from the repository
+                # 'repo:${GitHubRepo}:ref:refs/heads/main'
+      
+      Policies:
+        # Inline policies for CloudFormation deployment
+        - PolicyName: CloudFormationDeploymentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudFormationAccess
+                Effect: Allow
+                Action:
+                  - 'cloudformation:CreateStack'
+                  - 'cloudformation:UpdateStack'
+                  - 'cloudformation:DeleteStack'
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:DescribeStackEvents'
+                  - 'cloudformation:DescribeStackResources'
+                  - 'cloudformation:GetTemplate'
+                  - 'cloudformation:ValidateTemplate'
+                  - 'cloudformation:ListStacks'
+                  - 'cloudformation:GetTemplateSummary'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'cloudformation:ListChangeSets'
+                Resource: '*'
+              
+        # SAM CLI S3 bucket permissions (complete set)
+        - PolicyName: SAMCLIManagedS3BucketPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SAMCLIManagedBucketFullAccess
+                Effect: Allow
+                Action:
+                  # Read operations
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketLocation'
+                  - 's3:GetBucketVersioning'
+                  - 's3:ListBucket'
+                  - 's3:ListBucketVersions'
+                  # Write operations
+                  - 's3:PutObject'
+                  - 's3:DeleteObject'
+                  # Bucket management
+                  - 's3:CreateBucket'
+                  - 's3:DeleteBucket'
+                  # Bucket configuration
+                  - 's3:PutBucketPolicy'
+                  - 's3:GetBucketPolicy'
+                  - 's3:DeleteBucketPolicy'
+                  - 's3:PutBucketVersioning'
+                  - 's3:PutBucketPublicAccessBlock'
+                  - 's3:GetBucketPublicAccessBlock'
+                  - 's3:PutEncryptionConfiguration'
+                  - 's3:GetEncryptionConfiguration'
+                  - 's3:PutLifecycleConfiguration'
+                  - 's3:GetLifecycleConfiguration'
+                  # Tagging
+                  - 's3:PutBucketTagging'
+                  - 's3:GetBucketTagging'
+                  - 's3:PutObjectTagging'
+                  - 's3:GetObjectTagging'
+                Resource:
+                  # SAM CLI managed buckets
+                  - 'arn:aws:s3:::aws-sam-cli-managed-default-*'
+                  - 'arn:aws:s3:::aws-sam-cli-managed-default-*/*'
+                  # Application artifact buckets
+                  - 'arn:aws:s3:::*-cloudformation-artifacts-*'
+                  - 'arn:aws:s3:::*-cloudformation-artifacts-*/*'
+              
+              - Sid: IAMPassRole
+                Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'iam:PassedToService': 'cloudformation.amazonaws.com'
+      
+      Tags:
+        - Key: Name
+          Value: !Sub 'GitHubActions-cicd-Role-${Environment}'
+        - Key: Repository
+          Value: !Ref GitHubRepo
+
+Outputs:
+  GitHubActionsRoleArn:
+    Description: 'ARN of the IAM role for GitHub Actions to assume'
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleArn'

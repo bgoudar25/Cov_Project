@@ -1,24 +1,26 @@
-## Parameter Description
-The resources deployed by the infrastructure.yaml are configured by the parameters entered within the qa.conf and prod.conf.
+# General
+The folder contains all relevant templates and components to create an RDS Server with monitoring. Default configuration is set up for MS SQL.
 
-Below is a description of all standard parameters which are available in the project template.
-```json
-{
-  "Parameters": {
-    "VpcProductVersion": "Version of the VPC Product which is deployed.",
-    "Stage": "Stage of the Config File, typically prod or qa",
-    "ServiceName": "Name of the service which is deployed.",
-    "AlarmsEmail":"E-Mail address to be informed in case of alarms.",
-    "EnableEC2Autorecover":"Boolean if you want to auto recover your Ec2 if it is stuck.",
-    "EnableEnhancedMonitoring":"Boolean if you want to enable enhanced monitoring on the Ec2",
-    "BackupRetentionPeriod":"Time in days to keep backups taken.",
-    "EC2RestoreAMI":"AMI Id of a Snapshot from which you want to restore the Ec2",
-    "EC2InstanceType":"Ec2 Intance Type",
-    "OSPatchingTimeWindow": "AWS Cron Expression which defines the Operating System Maintenance Window",
-    "EC2VolumeSize":"Volume size of the Ec2 instance in GB.",
-    "DBSnapshotIdentifier":"Database Snapshot Id of a Snapshot from which you want to restore the RDS Server",
-    "DBInstanceType":"RDS Instance Typ"
-  }
-}
 
-```
+# Cloudformation YAML files
+Following yaml files are included in the project template for creating a RDS Instance.
+
+| File         |  Summary  |
+|:---------------:|:------------:|
+| rds.yaml  | This file deploys the RDS instance including the required roles and options for common tasks. | 
+| rds_mon.yaml | This file deploys cloudwatch monitoringfor the RDS Instance. | 
+
+
+# RDS Processes
+Below is the how-to documentation of common processes that are required for the RDS instances.
+Examples show how to implement the changes on QA sytem.
+
+## Restore RDS from a Snapshot
+./infrastructure/config/qa.conf
+- Set the "DBSnapshotIdentifier" parameter to the Snapshot ID to which you want to restore the RDS Server. Push the changes, the Cloudformation will restore the RDS to this Snapshot. This will delete and restore the entire RDS instance.
+- The restore will only be done when the parameter is changed, Cloudformation will not restore automatically on future changes that don't caue a replacement.
+
+
+## Change Instance Type of the RDS Instance
+./infrastructure/config/qa.conf
+- Set the "DBInstanceType" parameter to the RDS Instance Type which you require. Push the changes, the Cloudformation will change the Instance Type of the RDS.

@@ -1,0 +1,390 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: infrastructure setup
+
+Parameters:
+  Stage:
+    Description: Stage of the application
+    Type: String
+  VpcId:
+    Description: Id of the VPC
+    Type: AWS::EC2::VPC::Id
+  EnableEnhancedMonitoring:
+    Description: Provide metrics in real time for the operating system (OS) that your DB instance runs on.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+  BackupRetentionPeriod:
+    Type: Number
+    Description: Days to retain snapshots of RDS
+  RDSSnapshotIdentifier:
+    Description: (OPTIONAL) Snapshot identifier to restore the RDS database from
+    Type: String
+  HostedZoneId:
+    Type: String
+    Description: ID for the hosted zone to use
+  ServiceName:
+    Description: The name of the application to roll out
+    Type: String
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the first subnet to place the instance(s) in
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the second subnet to place the instance(s) in
+  DBInstanceType:
+    Description: Instance Type size parameter
+    Type: String
+  RDSStorageType:
+    Description: choose the storage type gp2 for 'General purpose SSD' & io1 for 'IOPS SSD'. 
+    Type: String
+    AllowedValues: ["gp2","io1"]
+  RDSProvisionedIops:
+    Description: Number of iops you want to provision for RDS storage.
+    Type: Number
+  RDSExportLogs:
+    Description: List of logs that you want to export to cloudwatch. Ex - audit, listener, trace, alert for Oracle instance
+    Type: String
+  RDSBackupBucketName:
+    Description: Enter the name of the bucket in which you want to store the db backup
+    Type: String
+  DBAllocatedStorage:
+    Description: The size of the database (GiB)
+    Type: Number
+    MinValue: '20'
+    MaxValue: '65536'
+    ConstraintDescription: must be between 20 and 65536 GiB.
+  RDSMaxAllocatedStorage:
+    Description: The Max size of the database (GiB) for Autoscaling
+    Type: Number
+  RDSEnableMultiAZ:
+    Description: If enabled Non-Aurora DBs are created with a MultiAZ option.
+    Type: String
+    AllowedValues: [true, false]
+  RDSDeleteProtect:
+    Description: Deletion protection of database
+    Type: String
+    AllowedValues: [true, false]
+  DBPort:
+    Description: Database port. If the default -1 is unchanged, a default db port for the specified db type will be used
+    Type: Number
+  CIDRRange:
+    Description: IP to allow incoming traffic on DataBase Port
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x.
+  DBEngine:
+    Description: Database engine (Aurora not possible)
+    Type: String
+    AllowedValues:
+      - mariadb
+      - mysql
+      - oracle-ee
+      - oracle-se2
+      - oracle-se1
+      - oracle-se
+      - postgres
+      - sqlserver-ee
+      - sqlserver-se
+      - sqlserver-ex
+      - sqlserver-web
+  DBEngineVersion:
+    Description: Database engine version
+    Type: String
+  DestinationLoggingBucketName:
+    Type: "String"
+  KmsKeyIdS3:
+    Description: Kms Key Id for S3 bucket
+    Type: String
+  BackupTag:
+    Description: Tag used to identify ec2 for backups
+    Type: String
+
+Conditions:
+  HasEnhancedMonitoring: !Equals [ !Ref EnableEnhancedMonitoring, 'true' ]
+  IsProd: !Equals [ !Ref Stage, 'prod' ]
+  IsDBRestoration: !Not [!Equals [ !Ref RDSSnapshotIdentifier, "" ] ]
+  iopsStorage: !Equals [!Ref RDSStorageType, "io1"]
+
+Mappings:
+  Config:
+    Service:
+      PreferredMaintenanceWindow: "sun:00:00-sun:02:00"
+      PreferredBackupWindow: "03:00-05:00"
+
+Resources:
+
+  ## SecurityGroupIngress to set Inbound rule of security group
+  DBSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DBSecurityGroup
+      IpProtocol: tcp
+      FromPort: !GetAtt DBInstance.Endpoint.Port
+      ToPort: !GetAtt DBInstance.Endpoint.Port
+      SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+      Description: allow access to the database for application servers
+
+  DBSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref DBSecurityGroup
+      IpProtocol: "-1"
+      DestinationPrefixListId: !ImportValue cov-network-intranet-prefix-list
+      Description: Allow Egress only in Intranet
+
+  ## Security group for RDS Instance
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database security group
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ServiceName}-${Stage}-db-sg"
+
+  ## Attaching the above Secrets Manager resource with RDS
+  SecretClusterAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBMasterSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+  ## Secrets Manager resource for RDS
+  DBMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      GenerateSecretString:
+        SecretStringTemplate: !Join ['', ['{"username": "', "dbadmin", '"}']]
+        GenerateStringKey: "password"
+        ExcludePunctuation: true
+        PasswordLength: 16
+      Tags:
+        - Key: !Ref ServiceName
+          Value: secretsmanager
+        - Key: Secret
+          Value: master
+  
+  ## Subnet group for RDS instance
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB subnet group
+      SubnetIds:
+        - !Ref SubnetA
+        - !Ref SubnetB
+
+  ## Role with enhanced monitoring permissions for RDS
+  EnhancedMonitoringRole:
+    Condition: HasEnhancedMonitoring
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: ''
+          Effect: Allow
+          Principal:
+            Service: monitoring.rds.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Path: "/"
+
+  ## S3 bucket for RDS Backup and Restore Operations
+  DbBackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:  
+          - id: W35
+            reason: "Done via Cloudtrail"    
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${RDSBackupBucketName}-${ServiceName}'
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref DestinationLoggingBucketName
+        LogFilePrefix: !Sub "${RDSBackupBucketName}-${ServiceName}-${Stage}-log"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !Ref KmsKeyIdS3
+
+  ForceSSLBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: DbBackupBucket
+      PolicyDocument:
+        Statement:
+          - Action: "s3:*"
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Resource:
+              - !GetAtt DbBackupBucket.Arn
+              - !Sub '${DbBackupBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+        Version: "2012-10-17"
+
+###### ROLE MUST BE DELETED ONCE MIGRATION IS DONE ####
+###### OPTION GROUP MUST BE ADJUSTED TO REMOVE THE ROLE ####
+
+  RDSMigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: rds.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /service-role/
+      Policies:
+        - PolicyName: DB_Migration_S3_BiWiKi
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub arn:aws:s3:::${RDSBackupBucketName}*
+        - PolicyName: DB_Migration_S3_Files_BiWiki
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObjectMetaData
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListMultipartUploadParts
+                  - s3:AbortMultipartUpload
+                Resource: !Sub arn:aws:s3:::${RDSBackupBucketName}*/*
+
+  DBOptionGroupBackUpRestore:
+    Type: AWS::RDS::OptionGroup
+    Properties:
+      EngineName:
+        Ref: DBEngine
+      MajorEngineVersion:
+        Ref: DBEngineVersion
+      OptionConfigurations:
+      - OptionName: SQLSERVER_BACKUP_RESTORE
+        OptionSettings:
+        - Name: IAM_ROLE_ARN
+          Value: !GetAtt ['RDSMigRole', 'Arn']
+      OptionGroupDescription: Custom option group for RDS instance
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${ServiceName}-${Stage}-og
+
+###### END MIGRATION ROLE / OPTION GROUP
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: "Snapshot"
+    UpdateReplacePolicy: "Snapshot"
+    Properties:
+      DBInstanceClass: !Ref DBInstanceType
+      StorageType: !Ref RDSStorageType
+      Iops: !If [iopsStorage, !Ref RDSProvisionedIops, !Ref "AWS::NoValue"]
+      DeletionProtection: !Ref RDSDeleteProtect
+      Engine: !Ref DBEngine
+      EngineVersion: !Ref DBEngineVersion
+      PreferredMaintenanceWindow: !FindInMap [Config, Service, PreferredMaintenanceWindow] 
+      PreferredBackupWindow: !FindInMap [Config, Service, PreferredBackupWindow] 
+      LicenseModel: license-included
+      Port: !Ref DBPort
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      DBSnapshotIdentifier: !If [IsDBRestoration, !Ref RDSSnapshotIdentifier, !Ref 'AWS::NoValue']
+      AllocatedStorage: !Ref DBAllocatedStorage
+      MaxAllocatedStorage: !Ref RDSMaxAllocatedStorage
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DBMasterSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DBMasterSecret, ':SecretString:password}}' ]]
+      StorageEncrypted: true
+      EnableCloudwatchLogsExports: [agent, error]
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      MonitoringInterval: !If [HasEnhancedMonitoring, 60, 0]
+      MonitoringRoleArn: !If [HasEnhancedMonitoring, !GetAtt ['EnhancedMonitoringRole', 'Arn'], !Ref 'AWS::NoValue']
+      OptionGroupName: !Ref DBOptionGroupBackUpRestore
+      VPCSecurityGroups:
+      - !GetAtt DBSecurityGroup.GroupId
+      #### Following Tags will be required in order to apply additional AWS discounts on database Migrations
+      #### THESE MUST NOT BE USED FOR NON-MIGRATION databases - (map-migrated, map-dba, aws-migration-project-id)
+      Tags: 
+      - Key: "map-migrated"
+        Value: "arn:aws:ec2:eu-central-1:117607382478:instance/i-0ddc58ed407f5f066"
+      - Key: "map-dba" 
+        Value: "arn:aws:ec2:eu-central-1:117607382478:instance/i-0ddc58ed407f5f066"
+      - Key: "aws-migration-project-id" 
+        Value: "MPE22026"
+      - Key: "AutoStopRDS"
+        Value: "True"
+      - Key: "BackupSelector"
+        Value: !Ref BackupTag
+
+  RDSRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId : !Ref HostedZoneId
+      Name: !Sub "${ServiceName}-db-${Stage}.${AWS::AccountId}.aws.glpoly.net"
+      ResourceRecords:
+      - !GetAtt DBInstance.Endpoint.Address
+      TTL: 900
+      Type: CNAME
+
+Outputs:
+
+  BiWikiDBEndpoint:
+    Description: database endpoint
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-DBEndpoint"
+
+  BiWikiDBRecord:
+    Description: database record
+    Value: !Ref RDSRecordSet
+
+  BiWikiDBPort:
+    Description: database listener port
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-DBPort"
+
+  BiWikiDBId:
+    Description: DB instance ID
+    Value: !Ref DBInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-DBId"
+
+  BiWikiDBSecurityGroup:
+    Description: Security group for DB instance
+    Value: !GetAtt DBSecurityGroup.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-DBSecurityGroup"
+
+  BiWikiDBMasterSecret:
+    Description: Master secret for DB instance
+    Value: !Ref DBMasterSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-DBMasterSecret"

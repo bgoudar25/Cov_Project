@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS instance monitoring'
+Parameters:
+  DBId:
+    Description: The RDS instance ID to monitor
+    Type: String
+
+Resources:
+
+  RDSMetricsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: "RDS-Instance-Metrics"
+      DashboardBody: !Sub 
+      - |
+        {
+            "widgets": [
+                {
+                    "type":"metric",
+                    "width":18,
+                    "height":9,
+                    "properties":{
+                        "metrics":[
+                            [ { "expression": "SEARCH('{AWS/RDS,DBInstanceIdentifier} MetricName=\"CPUUtilization\" ${rds_instance}', 'Average', 300)", "id": "a1" } ]
+                        ],
+                        "view": "timeSeries",
+                        "stacked": false,
+                        "region":"eu-central-1",
+                        "title":"RDS Instance CPU Utilization (%)"
+                    }
+                },
+                {
+                    "type":"metric",
+                    "width":18,
+                    "height":9,
+                    "properties":{
+                        "metrics":[
+                            [ { "expression": "SEARCH('{AWS/RDS,DBInstanceIdentifier} MetricName=\"FreeableMemory\" ${rds_instance}', 'Average', 300)", "id": "a1" } ]
+                        ],
+                        "view": "timeSeries",
+                        "stacked": false,
+                        "region":"eu-central-1",
+                        "title":"RDS Instance Available Memory (MB)"
+                    }
+                },
+                {
+                    "type":"metric",
+                    "width":18,
+                    "height":9,
+                    "properties":{
+                        "metrics":[
+                            [ { "expression": "SEARCH('{AWS/RDS,DBInstanceIdentifier} MetricName=\"FreeStorageSpace\" ${rds_instance}', 'Average', 300)", "id": "a1" } ]
+                        ],
+                        "view": "timeSeries",
+                        "stacked": false,
+                        "region":"eu-central-1",
+                        "title":"RDS Instance Free Storage Space (MB)"
+                    }
+                },
+                {
+                    "type":"metric",
+                    "width":18,
+                    "height":9,
+                    "properties":{
+                        "metrics":[
+                            [ { "expression": "SEARCH('{AWS/RDS,DBInstanceIdentifier} MetricName=\"ReadThroughput\" ${rds_instance}', 'Average', 300)", "id": "a1" } ]
+                        ],
+                        "view": "timeSeries",
+                        "stacked": false,
+                        "region":"eu-central-1",
+                        "title":"RDS Instance Read Throughput (MB/s)"
+                    }
+                },
+                {
+                    "type":"metric",
+                    "width":18,
+                    "height":9,
+                    "properties":{
+                        "metrics":[
+                            [ { "expression": "SEARCH('{AWS/RDS,DBInstanceIdentifier} MetricName=\"WriteThroughput\" ${rds_instance}', 'Average', 300)", "id": "a1" } ]
+                        ],
+                        "view": "timeSeries",
+                        "stacked": false,
+                        "region":"eu-central-1",
+                        "title":"RDS Instance Write Throughput (MB/s)"
+                    }
+                }
+              ]
+        }
+      - rds_instance: !Ref DBId

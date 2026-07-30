@@ -1,0 +1,242 @@
+  AWSTemplateFormatVersion: 2010-09-09
+  Description: Ec2 infrastructure setup
+
+  Parameters:
+    Stage:
+      Description: Stage of the application
+      Type: String
+    ServiceName:
+      Type: String        
+    EC2RestoreAMI:
+      Description: (OPTIONAL) AMI identifier to restore the EC2 instance from
+      Type: String
+    ApplicationName:
+      Description: The name of the application to roll out
+      Type: String
+    EC2SubnetId:
+      Type: String
+      Description: ID of the subnet to place the instance(s) in
+    VPCId: 
+      Description: VPC Id
+      Type: String
+    EBSVolumeSize:
+      Description: Size of attached EBS volume
+      Type: Number
+    InstanceType: 
+      Description: VPC Id
+      Type: String 
+    EC2KeyPairName:  
+      Description: Key Pair Name for BiWiki EC2
+      Type: String   
+    PatchTag:
+      Description: Tag used to identify ec2 for patching
+      Type: String
+    BackupTag:
+      Description: Tag used to identify ec2 for backups
+      Type: String
+      
+
+  Mappings:
+    Config:
+      Service:
+        ImageId: 'ami-0f9450f5c4bc31bd9'
+
+  Conditions:
+    IsEC2Restoration: !Not [!Equals [!Ref EC2RestoreAMI, ""]]
+
+  Resources:
+
+    ## Specifies a security group for instance EC2Connect.     
+    EC2SecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: F1000
+              reason: "Outbound traffic limitations will need to be added by the project team. Whitelisted to have the template running"
+      Properties:
+        GroupDescription: "Default security group for ec2 connect"
+        VpcId:
+          Ref: VPCId
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 22
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 443
+        - IpProtocol: tcp
+          FromPort: 2222
+          ToPort: 2222
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 2222
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 80
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 8443
+        - IpProtocol: tcp
+          FromPort: 8444
+          ToPort: 8444
+          SourcePrefixListId: !ImportValue cov-network-intranet-prefix-list
+          Description: allow access to EC2 instance via tcp port 8444
+        Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-${ApplicationName}-ec2-sg
+
+
+    EC2Role:
+      Type: AWS::IAM::Role
+      Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: F3
+              reason: "Wildcard actions required for operational flexibility"
+            - id: W11
+              reason: "Wildcard resources required for operational flexibility"
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+        Path: /service-role/
+        Policies:
+          - PolicyName: Ec2-S3
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:*
+                  Resource: '*'
+          - PolicyName: SecretManagerAccessPolicy
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - "secretsmanager:GetResourcePolicy"
+                    - "secretsmanager:GetSecretValue"
+                    - "secretsmanager:DescribeSecret"
+                    - "secretsmanager:ListSecretVersionIds"
+                  Resource: "arn:aws:secretsmanager:*:*:secret:*"
+                - Effect: Allow
+                  Action:
+                  - ec2:CreateTags
+                  - ec2:RunInstances
+                  - ec2:*
+                  Resource:
+                  - arn:aws:ec2:*::snapshot/*
+                  - arn:aws:ec2:*::image/*
+                - Effect: Allow
+                  Action:
+                  - ec2:DescribeInstances
+                  - ec2:CreateSnapshot
+                  - ec2:CreateImage
+                  - ec2:DescribeImages
+                  - ec2:RunInstances
+                  - ec2:*
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                  - rds:*
+                  Resource: '*'
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+          - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+
+    ## Using an instance profile to pass an IAM role to the EC2 instance
+    EC2InstanceProfile:
+      Type: AWS::IAM::InstanceProfile
+      Properties:
+        InstanceProfileName: !Sub EC2SecurityGroupSSRS-${AWS::StackName}
+        Path: "/"
+        Roles: 
+          - !Ref EC2Role
+
+    EC2Instance:
+      Type: AWS::EC2::Instance
+      Properties:
+        ImageId: !If [IsEC2Restoration, !Ref EC2RestoreAMI, !FindInMap [Config, Service, ImageId]]
+        InstanceType: !Ref InstanceType
+        BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref EBSVolumeSize
+            VolumeType: gp3
+            Encrypted : true
+            DeleteOnTermination: true
+        IamInstanceProfile: !Ref EC2InstanceProfile
+        KeyName: !Ref EC2KeyPairName
+        NetworkInterfaces:
+        - NetworkInterfaceId:
+            Ref: ENI
+          DeviceIndex: '1'
+        - AssociatePublicIpAddress: false
+          DeviceIndex: '0'
+          SubnetId:
+            Ref: EC2SubnetId
+          GroupSet:
+          - Fn::GetAtt:
+            - EC2SecurityGroup
+            - GroupId
+        Monitoring: true
+        Tags:
+          - Key: "Name"
+            Value: !Sub "${ServiceName}-${Stage}-ec2"
+          - Key: "PatchGroup"
+            Value: !Ref PatchTag
+          - Key: "BackupSelector"
+            Value: !Ref BackupTag
+          - Key: "cov:code-deploy-app-name"
+            Value: "deploy"
+          - Key: cov:adsecuritygroup
+            Value: !Ref ServiceName
+
+    ENI:
+      Type: AWS::EC2::NetworkInterface
+      Properties:
+        Description: Network Interface to be reused when recovering the EC2 Web instance.
+        GroupSet:
+          - !Ref EC2SecurityGroup
+        SubnetId: !Ref EC2SubnetId  
+
+  ################### Common Resources ###################
+  Outputs:
+    EC2InstanceID:
+      Description: EC2 instance ID
+      Value: !Ref EC2Instance
+      Export:
+        Name: !Sub "${AWS::StackName}-EC2Id"
+
+    PrivateEC2IpNEW:
+      Description: Private IP of Test EC2 instance
+      Value: !GetAtt EC2Instance.PrivateIp 
+      Export: 
+        Name: !Sub "${AWS::StackName}-PrivateEC2Ip-new" 
+
+    SharedEC2Parameternew:
+      Value:
+        Ref: EC2Instance
+      Export:
+        Name: !Sub "${AWS::StackName}-SharedEC2Parameternew"
+
+    SharedENIWEBnew:
+      Value: !Ref ENI
+      Export:
+        Name: !Sub "${AWS::StackName}-SharedENInew"
+
+ 

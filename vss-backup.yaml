@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Backup Plan template to enable Windows VSS and add backup rule to take backup of assigned resources daily at 5am UTC.
+
+Parameters:
+
+  ApplicationName:
+    Description: Name of the application
+    Type: String
+    
+  EnvironmentName:
+    Type: String
+  
+  BackupRetentionPeriod:
+    Type: Number
+    Description: Days to retain snapshots of EC2
+
+  SharedEC2Parameternew:
+    Type: String
+
+  DestinationLoggingBucketName:
+    Type: "String"
+
+  BackupTag:
+    Description: Tag to identify RDS for backups
+    Type: "String"
+
+  KmsKeyIdS3:
+    Description: Kms Key Id for S3 bucket
+    Type: String
+    
+Resources:
+  ## Creates a new IAM role for Backup
+  BackupRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "backup.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+  ## This resource specifies an encryption key for daily backup in AWS Key Management Service (AWS KMS).
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "Encryption key for daily backup"
+      EnableKeyRotation: True
+      Enabled: True
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              "AWS": { "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }
+            Action:
+              - kms:*
+            Resource: "*"
+  ## Creates a logical container where backups are stored.
+  BackupVaultWithDailyBackups:
+    Type: "AWS::Backup::BackupVault"
+    Properties:
+      BackupVaultName: !Sub "${ApplicationName}BackupVaultWithDailyBackupsnew"
+      EncryptionKeyArn: !GetAtt KMSKey.Arn
+  ## Backup Rules based on which daily backups will be performed
+  BackupPlanWithDailyBackups:
+    Type: "AWS::Backup::BackupPlan"
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub "${ApplicationName}BackupPlanWithDailyBackupsnew"
+        BackupPlanRule:
+          -
+            RuleName: "RuleForDailyBackups"
+            TargetBackupVault: !Ref BackupVaultWithDailyBackups
+            ScheduleExpression: cron(0 5 ? * 6L *)
+            # ScheduleExpression: cron(0/60 * ? * MON-FRI *)
+            Lifecycle:
+              DeleteAfterDays: !Ref BackupRetentionPeriod
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 120
+            RecoveryPointTags:
+              cov:ami-enforcement-exception: backup
+
+  ## Specifies a set of resources to assign to a backup plan.  
+  TagBasedBackupSelection:
+    Type: "AWS::Backup::BackupSelection"
+    Properties:
+      BackupSelection:
+        SelectionName: !Sub "${ApplicationName}-${EnvironmentName}-BackupSelection"
+        IamRoleArn: !GetAtt BackupRole.Arn
+        ListOfTags:
+         -
+           ConditionType: "STRINGEQUALS"
+           ConditionKey: "BackupSelector"
+           ConditionValue: !Ref BackupTag
+      BackupPlanId: !Ref BackupPlanWithDailyBackups
+## This resource creates an Amazon S3 bucket in the same AWS Region where you create the AWS CloudFormation stack.
+  ApmAssociationOutputBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:  
+          - id: W35
+            reason: "Done via Cloudtrail"    
+    UpdateReplacePolicy: Retain
+    Properties: 
+      BucketName: !Sub "${ApplicationName}-${EnvironmentName}-vss-ssm-asso-new"
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref DestinationLoggingBucketName
+        LogFilePrefix: !Sub "${ApplicationName}-${EnvironmentName}-vss-ssm-asso-log"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !Ref KmsKeyIdS3
+
+  ForceSSLBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: ApmAssociationOutputBucket
+      PolicyDocument:
+        Statement:
+          - Action: "s3:*"
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Resource:
+              - !GetAtt ApmAssociationOutputBucket.Arn
+              - !Sub '${ApmAssociationOutputBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+        Version: "2012-10-17"
+
+    

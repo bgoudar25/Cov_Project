@@ -1,0 +1,794 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Application Stack
+Parameters:
+  HostedZoneId:
+    Type: String
+  Stage:
+    Type: String
+  ServiceName:
+    Type: String
+  ApplicationName:
+    Type: String
+  AlarmsEmail:
+    Default: ''
+    Type: String
+    Description: if provided, an e-mail will be sent to the given address, when the healthcheck alarm is triggered
+  VpcProductVersion:
+    Type: String
+  DBInstanceType:
+    Description: Instance Type size parameter
+    Type: String
+  EnableEnhancedMonitoring:
+    Description: Provide metrics in real time for the operating system (OS) that your DB instance runs on.
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: true
+  HostedZoneName:
+    Description: Name of the HostedZone to which the ALB will be deployed.
+    Type: String
+  BackupRetentionPeriod:
+    Type: Number
+    Description: Days to retain snapshots of RDS
+    Default: 35
+  RDSSnapshotIdentifier:
+    Description: (OPTIONAL) Snapshot identifier to restore the RDS database from
+    Type: String
+  RDSProvisionedIops:
+    Description: Number of iops you want to provision for RDS storage.
+    Type: Number
+  RDSStorageType:
+    Description: choose the storage type gp2 for 'General purpose SSD' & io1 for 'IOPS SSD'. 
+    Type: String
+    AllowedValues: ["gp2","io1"]
+  RDSExportLogs:
+    Description: List of logs that you want to export to cloudwatch. Ex - audit, listener, trace, alert for Oracle instance
+    Type: String
+  RDSBackupBucketName:
+    Description: Enter the name of the bucket in which you want to store the db backup
+    Type: String
+  RDSMaxAllocatedStorage:
+    Description: The Max size of the database (GiB) for Autoscaling
+    Type: Number
+  RDSEnableMultiAZ:
+    Description: If enabled Non-Aurora DBs are created with a MultiAZ option.
+    Type: String
+    AllowedValues: [true, false]
+  RDSDeleteProtect:
+    Description: Deletion protection of database
+    Type: String
+    AllowedValues: [true, false]
+  DBAllocatedStorage:
+    Description: The size of the database (GiB)
+    Type: Number
+    MinValue: '20'
+    MaxValue: '65536'
+    ConstraintDescription: must be between 20 and 65536 GiB.
+  DBPort:
+    Description: Database port. If the default -1 is unchanged, a default db port for the specified db type will be used
+    Type: Number
+  CIDRRange:
+    Description: IP to allow incoming traffic on DataBase Port
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x.
+  DBEngine:
+    Description: Database engine (Aurora not possible)
+    Type: String
+    AllowedValues:
+      - mariadb
+      - mysql
+      - oracle-ee
+      - oracle-se2
+      - oracle-se1
+      - oracle-se
+      - postgres
+      - sqlserver-ee
+      - sqlserver-se
+      - sqlserver-ex
+      - sqlserver-web
+  DBEngineVersion:
+    Description: Database engine version
+    Type: String
+  ECRBiWikiImageName:
+    Type: String
+  BiWikiSecretArn:
+    Type: String
+  BiWikiDBSecretArn:
+    Type: String
+  ECRRepositoryUrl:
+    Description: ECR repository is stored in Automation Account.
+    Type: String
+  ECRImageVersion:
+    Type: String
+    Default: latest
+  ECSDesiredCount:
+    Type: Number
+  ContainerPort:
+    Type: String
+  ContainerSoftLimit:
+    Type: String
+  ContainerHardLimit:
+    Type: String
+  ContainerCPU:
+    Type: Number
+  ContainerMemory:
+    Type: Number
+  SESReplyAddress:
+    Description: Reply Address for SES
+    Type: String
+  EC2AMIId:
+    Description: (OPTIONAL) AMI identifier to restore the EC2 instance from
+    Type: String
+  EC2KeyPairName:  
+    Description: Key Pair Name for BiWiki EC2
+    Type: String
+  InstanceType:
+    Type: String
+  EBSVolumeSize:
+    Description: Size of attached EBS volume
+    Type: Number
+
+  EC2newAMIId:
+    Description: (OPTIONAL) AMI identifier to restore the EC2 instance from
+    Type: String
+    Default: "not-used"
+  EC2newKeyPairName:  
+    Description: Key Pair Name for BiWiki EC2
+    Type: String
+    Default: "not-used"
+  EC2newInstanceType:
+    Type: String
+    Default: "not-used"
+  EC2newEBSVolumeSize:
+    Description: Size of attached EBS volume
+    Type: Number
+    Default: 0
+  BiWikiDotNetCertificateArn:
+    Type: String
+    Default: ""
+    Description: ARN of the DotNet SSL Certificate from ACM  
+
+  EnterpriseApplicationId:
+    Type: "String"
+  SharedEndpointVersion:
+    Type: "String"
+  HAProxyBucketName: 
+    Description: Bucket for HAProxy Config file
+    Type: String  
+  HAProxyConfigFileName: 
+    Description: HAProxy config file name
+    Type: String  
+  HAProxyInstanceType:
+    Type: String
+  HAProxyInstanceSize:
+    Type: String   
+  HAProxyAmazonLinux2AMI:
+    Type: String
+
+  HAProxynewBucketName: 
+    Description: Bucket for HAProxy Config file
+    Type: String  
+  HAProxynewConfigFileName: 
+    Description: HAProxy config file name
+    Type: String  
+  HAProxynewInstanceType:
+    Type: String
+  HAProxynewInstanceSize:
+    Type: String   
+  HAProxynewAmazonLinux2AMI:
+    Type: String
+
+
+  OSPatchingTimeWindow:
+    Description: Cron or rate expression which defines, when to auto-patch windows instances
+    Type: String
+    Default: "cron(00 7 ? * SUN *)"
+  DeleteS3LogsAfterDays:
+    Type: Number
+    Description: Days to retain log files in maintenance bucket
+    Default: '60' 
+  HAProxyTestAMI:
+    Type: String
+############# Start/Stop lamda Parameter Start ###########################################
+  StopScheduleTime: 
+      Description: stop time of instance if tag is present in ec2
+      Type: String
+      Default: "cron(00 9 ? * SUN *)"
+  StartScheduleTime: 
+    Description: start time of instance if tag is present in ec2
+    Type: String
+    Default: "cron(00 5 ? * SUN *)"
+  ECSStartScheduleTime:
+    Description: Auto start ECS task as per cron expression
+    Type: String
+    Default: "cron(00 04 ? * MON *)"
+  ECSStopScheduleTime:
+    Description: Auto stop ECS task as per cron expression
+    Type: String
+    Default: "cron(00 15 ? * FRI *)"
+
+############# Start/Stop lamda Parameter End############################
+  
+Conditions:
+  IsProd: !Equals
+    - !Ref 'Stage'
+    - prod
+  IsQA: !Equals
+    - !Ref 'Stage'
+    - qa 
+  
+
+
+Mappings:
+  Config:
+    DeletionPolicies:
+      DeleteLogsAfterDays: 365
+    Ec2:
+      PatchTag: LinuxServer
+      BackupTag: ec2defaultbackup
+      ScheduleTag: GermanOfficeHours
+
+    Ec2new:
+      PatchTag: LinuxServer2023
+      BackupTag: ec2newdefaultbackup
+      ScheduleTag: GermanOfficeHours 
+
+    RDS:
+     BackupTag: rdsdefaultbackup
+Resources:
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: common/vpc.yaml
+      Parameters:
+        ApplicationName: !Ref 'ApplicationName'
+        VpcProductVersionName: !Ref 'VpcProductVersion'
+        Stage: !Ref 'Stage'
+        HostedZoneId: !Ref HostedZoneId
+
+
+  BiwikiRDS:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: rds/biwikirds.yaml
+      Parameters:
+        Stage: !Ref Stage
+        VpcId: !GetAtt VPC.Outputs.BiWiKiVpcId
+        EnableEnhancedMonitoring: !Ref EnableEnhancedMonitoring
+        BackupRetentionPeriod: !Ref BackupRetentionPeriod
+        RDSSnapshotIdentifier: !Ref RDSSnapshotIdentifier
+        HostedZoneId: !Ref HostedZoneId
+        ServiceName: !Ref ApplicationName
+        SubnetA: !GetAtt VPC.Outputs.BiWiKiPrivateSubnetIdA
+        SubnetB: !GetAtt VPC.Outputs.BiWiKiPrivateSubnetIdB
+        DBInstanceType: !Ref DBInstanceType
+        DBEngine: !Ref DBEngine
+        DBEngineVersion: !Ref DBEngineVersion
+        CIDRRange: !Ref CIDRRange
+        DBPort: !Ref DBPort
+        DBAllocatedStorage: !Ref DBAllocatedStorage
+        RDSDeleteProtect: !Ref RDSDeleteProtect
+        RDSEnableMultiAZ: !Ref RDSEnableMultiAZ
+        RDSMaxAllocatedStorage: !Ref RDSMaxAllocatedStorage
+        RDSBackupBucketName: !Ref RDSBackupBucketName
+        RDSExportLogs: !Ref RDSExportLogs
+        RDSStorageType: !Ref RDSStorageType
+        RDSProvisionedIops: !Ref RDSProvisionedIops
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+        BackupTag: !FindInMap
+          - Config
+          - RDS
+          - BackupTag  
+
+  RDSBackup:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
+        BackupRetentionPeriod: !Ref BackupRetentionPeriod
+        BackupTag: !FindInMap
+          - Config
+          - RDS
+          - BackupTag  
+      TemplateURL: "./rds/rds_backup.yaml"      
+
+  RDSMonitoring:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: rds/rds_mon.yaml
+      Parameters:
+        DBId: !GetAtt 'BiwikiRDS.Outputs.BiWikiDBId'
+
+  SES:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: common/ses.yaml
+      Parameters:
+        Stage: !Ref 'Stage'
+        ServiceName: !Ref 'ServiceName'
+        SESReplyAddress: !Ref 'SESReplyAddress'
+
+  # SESPasswordRotation:
+  #   Condition: IsQA
+  #   Type: "AWS::CloudFormation::Stack"
+  #   Properties:
+  #     TemplateURL: "common/ses_password-rotation.yaml"
+  #     Parameters:
+  #       Stage: !Ref 'Stage'
+  #       ServiceName: !Ref 'ServiceName'
+  #       ApplicationName: !Sub "${ApplicationName}-sestest"     
+  
+  # SSLCertificateDotnmet:
+  #   Type: "AWS::CloudFormation::Stack"
+  #   DeletionPolicy: Retain
+  #   Properties:
+  #     Parameters:
+  #       ApplicationName: !Ref ApplicationName
+  #       SSLEnvironment: !Ref Stage
+  #       ProvisioningArtifactName: !Sub 'v0.0.5'
+  #     TemplateURL: "./ssl/ssl-certsDotNet.yaml"  
+
+  ## SSL certificate creation ##
+  # SSLCertificateGlpoly:
+  #   Type: "AWS::CloudFormation::Stack"
+  #   Condition: IsProd
+  #   DependsOn: SSLCertificateDotnmet
+  #   Properties:
+  #     Parameters:
+  #       ApplicationName: !Ref ApplicationName
+  #       ServiceName: !Ref ServiceName
+  #       SSLEnvironment: !Ref Stage
+  #       ProvisioningArtifactName: !Sub 'v0.0.30'
+  #     TemplateURL: "./ssl/ssl-certsglpoly.yaml" 
+
+  # NLBSSLCertificateGlpoly:
+  #   Type: "AWS::CloudFormation::Stack"
+  #   Condition: IsProd
+  #   DependsOn: SSLCertificateDotnmet
+  #   Properties:
+  #     Parameters:
+  #       ApplicationName: !Sub "${ApplicationName}-nlb"
+  #       ServiceName: !Sub "${ServiceName}-nlb"
+  #       SSLEnvironment: !Ref Stage
+  #       ProvisioningArtifactName: 'v0.0.30'
+  #     TemplateURL: "./ssl/ssl-certsglpoly.yaml"  
+  
+  #########################################################
+  #                         HA-PROXY                      #
+  #########################################################
+  HAProxy: 
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: haproxy/haproxy.yaml
+      Parameters:
+        ApplicationName: !Ref ServiceName
+        HAProxyBucketName: !Ref HAProxyBucketName
+        cfgFileName: !Ref HAProxyConfigFileName 
+        region: "eu-central-1"
+        EC2InstanceType: !Ref HAProxyInstanceType
+        ImageId: !Ref HAProxyAmazonLinux2AMI
+        EBSVolumeSize: !Ref HAProxyInstanceSize
+        Vpc: !GetAtt VPC.Outputs.BiWiKiVpcId
+        IntranetSubnetA: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdA
+        HAProxyEC2Autorecover: "true"
+        Stage: !Ref 'Stage' 
+        PatchTag: !FindInMap
+          - Config
+          - Ec2
+          - PatchTag
+        BackupTag: !FindInMap
+          - Config
+          - Ec2
+          - BackupTag
+
+
+
+  #########################################################
+  #                         HA-PROXYnew                    #
+  #########################################################
+
+  HAProxynew:
+    #Condition: IsQA 
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: haproxynew/haproxy.yaml
+      Parameters:
+        ApplicationName: !Ref ServiceName
+        HAProxyBucketName: !Ref HAProxynewBucketName
+        cfgFileName: !Ref HAProxynewConfigFileName 
+        region: "eu-central-1"
+        EC2InstanceType: !Ref HAProxynewInstanceType
+        ImageId: !Ref HAProxynewAmazonLinux2AMI
+        EBSVolumeSize: !Ref HAProxynewInstanceSize
+        Vpc: !GetAtt VPC.Outputs.BiWiKiVpcId
+        IntranetSubnetA: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdA
+        HAProxyEC2Autorecover: "true"
+        Stage: !Ref 'Stage' 
+        PatchTag: !FindInMap
+          - Config
+          - Ec2
+          - PatchTag
+        BackupTag: !FindInMap
+          - Config
+          - Ec2
+          - BackupTag
+
+
+  # ## Original EC2 Host
+  EC2Instance:
+    Condition: IsQA
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        Stage: !Ref Stage
+        EC2RestoreAMI: !Ref EC2AMIId
+        InstanceType: !Ref InstanceType
+        ApplicationName: !Ref ApplicationName
+        EC2SubnetId: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdB
+        EBSVolumeSize: !Ref EBSVolumeSize
+        EC2KeyPairName: !Ref EC2KeyPairName
+        VPCId: !GetAtt 'VPC.Outputs.BiWiKiVpcId'
+        ServiceName: !Ref 'ServiceName'
+        PatchTag: !FindInMap
+          - Config
+          - Ec2
+          - PatchTag
+        BackupTag: !FindInMap
+          - Config
+          - Ec2
+          - BackupTag
+      TemplateURL: "./ec2/ec2.yaml"
+  VSSBackup:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        ApplicationName: !Ref ServiceName
+        EnvironmentName: !Ref Stage
+        BackupRetentionPeriod: 90
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+        SharedEC2Parameter: !If [IsProd, !GetAtt HAProxy.Outputs.SharedHAProxyEC2Parameter, !GetAtt EC2Instance.Outputs.SharedEC2Parameter]
+        BackupTag: !FindInMap
+         - Config
+         - Ec2
+         - BackupTag
+      TemplateURL: "./ec2/vss-backup.yaml"
+  EC2Patching:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ec2/ec2_patching.yaml
+      Parameters:
+        Stage: !Ref 'Stage'
+        OSPatchingTimeWindow: !Ref 'OSPatchingTimeWindow'
+        DeleteLogsAfterDays: !FindInMap
+          - Config
+          - DeletionPolicies
+          - DeleteLogsAfterDays
+        ServiceName: !Ref 'ServiceName'
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+        PatchTag: !FindInMap
+          - Config
+          - Ec2
+          - PatchTag
+
+
+          ##### ##  START EC2_NEW Host ####################
+
+  EC2newInstance:
+    Condition: IsQA
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        Stage: !Ref Stage
+        EC2RestoreAMI: !Ref EC2newAMIId
+        InstanceType: !Ref EC2newInstanceType
+        ApplicationName: !Ref ApplicationName
+        EC2SubnetId: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdB
+        EBSVolumeSize: !Ref EC2newEBSVolumeSize
+        EC2KeyPairName: !Ref EC2newKeyPairName
+        VPCId: !GetAtt 'VPC.Outputs.BiWiKiVpcId'
+        ServiceName: !Ref 'ServiceName'
+        PatchTag: !FindInMap
+          - Config
+          - Ec2new
+          - PatchTag
+        BackupTag: !FindInMap
+          - Config
+          - Ec2new
+          - BackupTag
+      TemplateURL: "./ec2new/ec2.yaml"
+  VSSBackupnew:
+    Condition: IsQA
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        ApplicationName: !Ref ServiceName
+        EnvironmentName: !Ref Stage
+        BackupRetentionPeriod: 90
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+        SharedEC2Parameternew: !GetAtt EC2newInstance.Outputs.SharedEC2Parameternew
+        #SharedEC2Parameter: !If [IsProd, !GetAtt HAProxy.Outputs.SharedHAProxyEC2Parameter, !GetAtt EC2Instance.Outputs.SharedEC2Parameter]
+        BackupTag: !FindInMap
+         - Config
+         - Ec2new
+         - BackupTag
+      TemplateURL: "./ec2new/vss-backup.yaml"
+  EC2Patchingnew:
+    Condition: IsQA
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ec2new/ec2_patching.yaml
+      Parameters:
+        Stage: !Ref 'Stage'
+        OSPatchingTimeWindow: !Ref 'OSPatchingTimeWindow'
+        DeleteLogsAfterDays: !FindInMap
+          - Config
+          - DeletionPolicies
+          - DeleteLogsAfterDays
+        ServiceName: !Ref 'ServiceName'
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+        PatchTag: !FindInMap
+          - Config
+          - Ec2new
+          - PatchTag
+
+##############End EC2NEW INSTANCE ##########################
+
+  AWSInstanceScheduler:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsQA
+    Properties:
+      TemplateURL: instance_scheduler/instance_scheduler_aws.json
+      Parameters:
+        CustomStackName: AWSInstanceScheduler
+        TagName: Schedule
+        ScheduledServices: EC2
+        ScheduleRdsClusters: 'No'
+        CreateRdsSnapshot: 'Yes'
+        SchedulingActive: 'Yes'
+        Regions: eu-central-1
+        DefaultTimezone: Europe/Berlin
+        EnableSSMMaintenanceWindows: 'Yes'
+        ScheduleLambdaAccount: 'Yes'
+        CrossAccountRoles: ''
+        Trace: 'No'
+        LogRetentionDays: '30'
+        UseCloudWatchMetrics: 'No'
+        SchedulerFrequency: '5'
+        MemorySize: '128'
+        StartedTags: ''
+        StoppedTags: ''
+  AWSInstanceSchedules:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsQA
+    Properties:
+      TemplateURL: instance_scheduler/schedules.json
+      Parameters:
+        ServiceToken: !GetAtt 'AWSInstanceScheduler.Outputs.ServiceInstanceScheduleServiceToken'
+      
+  
+###################### Lamda Start/Stop Section ##################################################  
+  Scheduler:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      Parameters:
+        StopScheduleTime: !Ref StopScheduleTime
+        StartScheduleTime: !Ref StartScheduleTime
+      TemplateURL: common/lambda.yaml
+###################### Lamda Start/Stop Section ##################################################  
+
+
+  ##########################################################
+  #                         ALB                            #
+  ##########################################################
+  # ALB:
+  #   Condition: IsQA
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     TemplateURL: alb/alb.yaml
+  #     Parameters:
+  #       ServiceName: !Ref 'ServiceName'
+  #       Stage: !Ref 'Stage'
+  #       LoadBalancerDomain: !Sub 'biwiki-qa.${HostedZoneName}'
+  #       ApplicationPort: '443'
+  #       HostedZoneId: !Ref HostedZoneId
+  #       BiWikiDotNetCertificateArn: !GetAtt 'SSLCertificateDotnmet.Outputs.BiWikiDotNetCertificateArn'
+  #       BiWikiGlpolyCertificateArn: !GetAtt 'SSLCertificateGlpoly.Outputs.BiWikiGlpolyCertificateArn'
+  #       VpcId: !GetAtt 'VPC.Outputs.BiWiKiVpcId'
+  #       TargetInstanceId: !GetAtt 'EC2Instance.Outputs.EC2InstanceID'
+  #       SubnetAId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdA'
+  #       SubnetBId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdB'
+  #       SubnetCId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdC'
+  #       AccessLogsBucketName: !GetAtt 'ALBLog.Outputs.BucketName'
+  #       AlbSecurityGroupId: !GetAtt 'ALBSecurityGroup.Outputs.SecurityGroupId'
+  #       EnterpriseApplicationId: '9669b612-ea3f-45b6-8bc4-f68a920205e1'
+  #       ApplicationName: !Ref 'ApplicationName'
+  ECSALB:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: alb/ecs_alb.yaml
+      Parameters:
+        BiWikiGlpolyCertificateArn: !If 
+        - IsQA
+        - 'arn:aws:acm:eu-central-1:196615020824:certificate/f68e4681-ce9d-49d9-a639-7272b08a96c4'  # QA manual cert
+        - 'arn:aws:acm:eu-central-1:091489542225:certificate/2e042e7a-923b-4b81-84c2-c6c76805fbdd'  # PROD manual cert
+        NLBBiWikiGlpolyCertificateArn: !If
+        - IsQA
+        - 'arn:aws:acm:eu-central-1:196615020824:certificate/3ccbb921-d007-4f24-a651-bbbfce859f71'  # QA NLB cert
+        - 'arn:aws:acm:eu-central-1:091489542225:certificate/e3fca38c-ca31-425c-8147-7638bd5eccf1'  # PROD NLB cert
+        ServiceName: !Ref 'ServiceName'
+        Stage: !Ref 'Stage'
+        HostedZoneId: !Ref HostedZoneId
+        #BiWikiDotNetCertificateArn: !GetAtt 'SSLCertificateDotnmet.Outputs.BiWikiDotNetCertificateArn'
+        BiWikiDotNetCertificateArn: !Ref BiWikiDotNetCertificateArn 
+
+        # BiWikiGlpolyCertificateArn: !GetAtt 'SSLCertificateGlpoly.Outputs.BiWikiGlpolyCertificateArn'
+        # NLBBiWikiGlpolyCertificateArn: !GetAtt 'NLBSSLCertificateGlpoly.Outputs.BiWikiGlpolyCertificateArn'
+        VpcId: !GetAtt 'VPC.Outputs.BiWiKiVpcId'
+        SubnetAId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdA'
+        SubnetBId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdB'
+        SubnetCId: !GetAtt 'VPC.Outputs.BiWiKiIntranetSubnetIdC'
+        # AccessLogsBucketName: !GetAtt 'ALBLog.Outputs.BucketName'
+        AlbSecurityGroupId: !GetAtt 'ALBSecurityGroup.Outputs.SecurityGroupId'
+        EnterpriseApplicationId: !Ref 'EnterpriseApplicationId'
+        ApplicationName: !Ref 'ApplicationName'
+  ALBMonitoring:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: alb/alb_mon.yaml
+      Parameters:
+        ServiceName: !Ref 'ApplicationName'
+        Stage: !Ref 'Stage'
+        LoadBalancerArn: !GetAtt 'ECSALB.Outputs.ContainerLoadBalancerArn'
+        TargetGroupArn1: !GetAtt 'ECSALB.Outputs.ContainerTargetGroupArn'
+        TargetGroupLabel1: !Sub 'biwiki.${HostedZoneName}'
+        MinimalHealthyHostCount: 1
+        UnhealthyHostNotificationEmail: !Ref 'AlarmsEmail'
+  ALBLog:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: alb/alb_log.yaml
+      Parameters:
+        ServiceName: !Ref 'ServiceName'
+        DestinationLoggingBucketName: !GetAtt 'S3LoggingCommonBucket.Outputs.LoggingBucketName'
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+  ALBSecurityGroup:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: alb/alb_secgrp.yaml
+      Parameters:
+        ServiceName: !Ref 'ApplicationName'
+        Stage: !Ref 'Stage'
+        ConnectedVpcId: !GetAtt 'VPC.Outputs.BiWiKiVpcId'
+
+  ##########################################################
+  ##      EFS created to attach with ECS Taskdefinition #### 
+  ##########################################################
+  EFS:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        SubnetA: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdA
+        SubnetB: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdB
+        SharedSecurityGroup: !GetAtt ALBSecurityGroup.Outputs.SecurityGroupId
+        ServiceName: !Ref ServiceName
+      TemplateURL: "./efs/efs-template.yaml"
+
+# ECS created for Docker Image Release #######
+  ECS:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
+        VPCId: !GetAtt VPC.Outputs.BiWiKiVpcId
+        IntranetSubnetIdA: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdA
+        IntranetSubnetIdB: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdB
+        ECRRepositoryUrl: !Ref ECRRepositoryUrl
+        ECRImageVersion: !Ref ECRImageVersion 
+        ECSDesiredCount: !Ref ECSDesiredCount
+        ContainerCPU: !Ref ContainerCPU
+        ContainerMemory: !Ref ContainerMemory
+        SharedSecurityGroup: !GetAtt ALBSecurityGroup.Outputs.SecurityGroupId
+        SharedTargetGroupBiWiki: !GetAtt ECSALB.Outputs.ContainerTargetGroupArn
+        SharedBiWikiEFS: !GetAtt EFS.Outputs.SharedBiWikiEFS
+        ECRBiWikiImageName: !Ref ECRBiWikiImageName
+        BiWikiSecretArn: !Ref BiWikiSecretArn
+        BiWikiDBSecretArn: !Ref BiWikiDBSecretArn
+        ContainerPort: !Ref ContainerPort
+        ContainerSoftLimit: !Ref ContainerSoftLimit
+        ContainerHardLimit: !Ref ContainerHardLimit
+      TemplateURL: "./ecs/ecscluster.yaml"
+
+# ECS shceudler to stop and start ecs task #######
+  ECSScheduler:
+    Condition: IsQA
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
+        ECSStartScheduleTime: !Ref ECSStartScheduleTime
+        ECSStopScheduleTime: !Ref ECSStopScheduleTime
+      TemplateURL: "./ecs/ecs_scheduler.yaml"
+
+## Shared Endpoint Service for BISQL connection
+  SharedEndpoint:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      Parameters:
+        Stage: !Ref Stage
+        ServiceName: !Ref ServiceName
+        VPCName: !GetAtt 'VPC.Outputs.BiWiKiVpcName'
+        SharedEndpointVersion: !Ref SharedEndpointVersion
+      TemplateURL: "./endpointservice/endpointservice.yaml"
+
+  # BiwikiRoipeEndpointService:
+  #   Condition: IsProd
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     TemplateURL: endpointservice/biwiki-roipe-endpoint.yaml
+  #     Parameters:
+  #       ServiceName: !Ref 'ServiceName'
+  #       Stage: !Ref 'Stage'
+
+  NLB:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nlb/nlb.yaml
+      Parameters:
+        ServiceName: !Ref 'ServiceName'
+        Stage: !Ref 'Stage'
+        VpcId: !GetAtt VPC.Outputs.BiWiKiVpcId
+        SubnetIdA: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdA
+        SubnetIdB: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdB
+        SubnetIdC: !GetAtt VPC.Outputs.BiWiKiIntranetSubnetIdC
+        EcsAlbArn: !GetAtt ECSALB.Outputs.ContainerLoadBalancerArn
+
+  ProducerEndpointService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: endpointservice/producerendpoint.yaml
+      Parameters:
+        ServiceName: !Ref 'ServiceName'
+        Stage: !Ref 'Stage'
+        NLBArn: !GetAtt NLB.Outputs.NLBArn
+        EndpointServiceDomain: !GetAtt NLB.Outputs.NlbRecordSetDns
+## Auto Stop RDS Instance
+  LambdaStopResources:
+    Condition: IsQA
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: lambda_stop_rds/lambda_stop_rds.yaml
+      Parameters:
+        VpcId: !GetAtt VPC.Outputs.BiWiKiVpcId
+        SubnetIdA: !GetAtt "VPC.Outputs.BiWiKiIntranetSubnetIdA"
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
+
+  S3LoggingCommonBucket:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: s3_logging/s3_logging_bucket.yaml
+      Parameters:
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
+        DeleteS3LogsAfterDays: !Ref DeleteS3LogsAfterDays
+        KmsKeyIdS3: !GetAtt KMSCMKS3.Outputs.KmsKeyId
+
+  KMSCMKS3:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: kms/kms.yaml
+      Parameters:
+        ServiceName: !Ref ServiceName
+        Stage: !Ref Stage
